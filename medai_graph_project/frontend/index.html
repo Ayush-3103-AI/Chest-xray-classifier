@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical AI - 3D Graph Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        
+        #graph-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            max-width: 300px;
+        }
+        
+        #controls h2 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 18px;
+        }
+        
+        #controls button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px 0;
+            width: 100%;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        
+        #controls button:hover {
+            background: #5568d3;
+        }
+        
+        #info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            max-width: 300px;
+            font-size: 12px;
+        }
+        
+        #info h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+        }
+        
+        .node-info {
+            margin: 5px 0;
+            padding: 5px;
+            background: #f0f0f0;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="graph-container"></div>
+    
+    <div id="controls">
+        <h2>Controls</h2>
+        <button onclick="resetCamera()">Reset Camera</button>
+        <button onclick="togglePhysics()">Toggle Physics</button>
+        <button onclick="reloadData()">Reload Data</button>
+    </div>
+    
+    <div id="info">
+        <h3>Node Information</h3>
+        <div id="node-info">Click a node to see details</div>
+    </div>
+
+    <script type="module">
+        import ForceGraph3D from 'https://cdn.jsdelivr.net/npm/3d-force-graph@1.70.12/dist/3d-force-graph.min.js';
+        
+        let graphData = null;
+        let physicsEnabled = true;
+        
+        // Load graph data
+        async function loadGraphData() {
+            try {
+                const response = await fetch('../outputs/inference_snapshot.json');
+                graphData = await response.json();
+                console.log('Graph data loaded:', graphData);
+                return graphData;
+            } catch (error) {
+                console.error('Error loading graph data:', error);
+                // Fallback to empty graph
+                return {
+                    nodes: [{id: "Patient_Xray", group: 2, val: 15}],
+                    links: []
+                };
+            }
+        }
+        
+        // Initialize 3D force graph
+        async function initGraph() {
+            const data = await loadGraphData();
+            
+            const Graph = ForceGraph3D()
+                (document.getElementById('graph-container'))
+                .jsonData(data)
+                .nodeLabel(node => `${node.id}\nGroup: ${node.group}`)
+                .nodeColor(node => {
+                    // Color by group
+                    if (node.group === 1) return '#ff6b6b'; // Pathology nodes (red)
+                    if (node.group === 2) return '#4ecdc4'; // Patient node (cyan)
+                    return '#95a5a6'; // Default (gray)
+                })
+                .nodeVal(node => node.val || 10)
+                .linkWidth(link => link.value * 3) // Width based on attention score
+                .linkColor(link => {
+                    // Color based on attention value
+                    const alpha = link.value;
+                    return `rgba(255, 107, 107, ${alpha})`;
+                })
+                .linkDirectionalArrowLength(6)
+                .linkDirectionalArrowRelPos(1)
+                .onNodeHover(node => {
+                    // Highlight on hover
+                    if (node) {
+                        document.getElementById('node-info').innerHTML = `
+                            <div class="node-info">
+                                <strong>Node:</strong> ${node.id}<br>
+                                <strong>Group:</strong> ${node.group}<br>
+                                <strong>Value:</strong> ${node.val || 'N/A'}
+                            </div>
+                        `;
+                    }
+                })
+                .onNodeClick(node => {
+                    // Show node details on click
+                    const connectedLinks = data.links.filter(
+                        link => link.source === node.id || link.target === node.id
+                    );
+                    
+                    let info = `
+                        <div class="node-info">
+                            <strong>Node:</strong> ${node.id}<br>
+                            <strong>Group:</strong> ${node.group}<br>
+                            <strong>Value:</strong> ${node.val || 'N/A'}<br>
+                            <strong>Connections:</strong> ${connectedLinks.length}
+                        </div>
+                    `;
+                    
+                    if (connectedLinks.length > 0) {
+                        info += '<div style="margin-top: 10px;"><strong>Connected to:</strong><ul style="margin: 5px 0; padding-left: 20px;">';
+                        connectedLinks.forEach(link => {
+                            const otherNode = link.source === node.id ? link.target : link.source;
+                            info += `<li>${otherNode} (attention: ${link.value.toFixed(3)})</li>`;
+                        });
+                        info += '</ul></div>';
+                    }
+                    
+                    document.getElementById('node-info').innerHTML = info;
+                })
+                .onNodeDragEnd(node => {
+                    node.fx = node.x;
+                    node.fy = node.y;
+                    node.fz = node.z;
+                });
+            
+            // Enable physics
+            Graph.d3Force('charge').strength(-300);
+            Graph.d3Force('link').distance(link => 100 / (link.value + 0.1));
+            
+            window.Graph = Graph;
+        }
+        
+        // Control functions
+        window.resetCamera = function() {
+            if (window.Graph) {
+                window.Graph.cameraPosition({ x: 0, y: 0, z: 500 });
+            }
+        };
+        
+        window.togglePhysics = function() {
+            physicsEnabled = !physicsEnabled;
+            if (window.Graph) {
+                window.Graph.enableNodeDrag(!physicsEnabled);
+                window.Graph.d3Force('charge').strength(physicsEnabled ? -300 : 0);
+            }
+        };
+        
+        window.reloadData = async function() {
+            const data = await loadGraphData();
+            if (window.Graph) {
+                window.Graph.jsonData(data);
+            }
+        };
+        
+        // Initialize on load
+        initGraph();
+    </script>
+</body>
+</html>
